@@ -1,7 +1,9 @@
 package template
 
 import (
+	"net"
 	"regexp"
+	"strings"
 	gotmpl "text/template"
 
 	"github.com/coredns/coredns/core/dnsserver"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/mholt/caddy"
 	"github.com/miekg/dns"
+	"github.com/yl2chen/cidranger"
 )
 
 func init() {
@@ -41,7 +44,6 @@ func templateParse(c *caddy.Controller) (handler Handler, err error) {
 	handler.Templates = make([]template, 0)
 
 	for c.Next() {
-
 		if !c.NextArg() {
 			return handler, c.ArgErr()
 		}
@@ -75,6 +77,7 @@ func templateParse(c *caddy.Controller) (handler Handler, err error) {
 
 		t.answer = make([]*gotmpl.Template, 0)
 
+		var matchClients []*net.IPNet
 		for c.NextBlock() {
 			switch c.Val() {
 			case "match":
@@ -89,6 +92,21 @@ func templateParse(c *caddy.Controller) (handler Handler, err error) {
 					}
 					templatePrefix = templatePrefix + regex + " "
 					t.regex = append(t.regex, r)
+				}
+			case "match-clients":
+				args := c.RemainingArgs()
+				if len(args) == 0 {
+					return handler, c.ArgErr()
+				}
+				for _, cidr := range args {
+					if strings.ToLower(cidr) == "any" {
+						cidr = "0.0.0.0/0"
+					}
+					_, network, err := net.ParseCIDR(cidr)
+					if err != nil {
+						return handler, c.Errf("could not parse cidr: %s, %v", cidr, err)
+					}
+					matchClients = append(matchClients, network)
 				}
 
 			case "answer":
@@ -153,6 +171,15 @@ func templateParse(c *caddy.Controller) (handler Handler, err error) {
 
 		if len(t.regex) == 0 {
 			t.regex = append(t.regex, regexp.MustCompile(".*"))
+		}
+		if len(matchClients) == 0 {
+			_, any, _ := net.ParseCIDR("0.0.0.0/0")
+			t.ranger.Insert(cidranger.NewBasicRangerEntry(*any))
+		} else {
+			ranger := t.ranger
+			for i := 0; i < len(matchClients); i++ {
+				ranger.Insert(cidranger.NewBasicRangerEntry(*matchClients[i]))
+			}
 		}
 
 		if len(t.answer) == 0 && len(t.authority) == 0 && t.rcode == dns.RcodeSuccess {

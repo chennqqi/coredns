@@ -3,6 +3,7 @@ package template
 import (
 	"bytes"
 	"context"
+	"net"
 	"regexp"
 	"strconv"
 	gotmpl "text/template"
@@ -14,6 +15,7 @@ import (
 	"github.com/coredns/coredns/request"
 
 	"github.com/miekg/dns"
+	"github.com/yl2chen/cidranger"
 )
 
 // Handler is a plugin handler that takes a query and templates a response.
@@ -28,6 +30,7 @@ type template struct {
 	zones      []string
 	rcode      int
 	regex      []*regexp.Regexp
+	ranger     cidranger.Ranger
 	answer     []*gotmpl.Template
 	additional []*gotmpl.Template
 	authority  []*gotmpl.Template
@@ -146,7 +149,10 @@ func (t template) match(state request.Request, zone string) (templateData, bool,
 	}
 
 	for _, regex := range t.regex {
-		if !regex.MatchString(state.Name()) {
+		ip := state.RemoteAddr()
+		ipaddr := net.ParseIP(ip)
+		contains, _ := t.ranger.Contains(ipaddr)
+		if !regex.MatchString(state.Name()) || !contains {
 			continue
 		}
 
